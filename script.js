@@ -172,21 +172,164 @@ function canMove(row, col) {
     return row >= 0 && row < ROWS && col >= 0 && col < COLS && grid[row][col] === null;
 }
 
-// Check for Wins
+// Check for Wins (Match Detection)
 function checkForWins() {
-    // Implement the logic for checking matches and clearing them, then updating score
-    // For example, you can check for horizontal, vertical, or diagonal matches
+    const matches = findAllMatches();
+    if (matches.length > 0) {
+        winSound.play();
+        clearMatches(matches);
+        collapseGrid();
+        updateScore();
+    }
 }
 
-// Collapse Grid
+// Find All Matches in the Grid
+function findAllMatches() {
+    const matches = new Set();
+
+    // Helper to add matched cells to the set
+    const addMatch = (cells) => {
+        cells.forEach(cell => matches.add(cell));
+    };
+
+    // Check Horizontal Matches
+    for (let r = 0; r < ROWS; r++) {
+        let count = 1;
+        for (let c = 1; c < COLS; c++) {
+            if (grid[r][c] === grid[r][c - 1] && grid[r][c] !== null) {
+                count++;
+            } else {
+                if (count >= 4) { // Changed from 3 to 4
+                    for (let k = c - count; k < c; k++) {
+                        addMatch([`${r},${k}`]);
+                    }
+                }
+                count = 1;
+            }
+        }
+        if (count >= 4) { // Changed from 3 to 4
+            for (let k = COLS - count; k < COLS; k++) {
+                addMatch([`${r},${k}`]);
+            }
+        }
+    }
+
+    // Check Vertical Matches
+    for (let c = 0; c < COLS; c++) {
+        let count = 1;
+        for (let r = 1; r < ROWS; r++) {
+            if (grid[r][c] === grid[r - 1][c] && grid[r][c] !== null) {
+                count++;
+            } else {
+                if (count >= 4) { // Changed from 3 to 4
+                    for (let k = r - count; k < r; k++) {
+                        addMatch([`${k},${c}`]);
+                    }
+                }
+                count = 1;
+            }
+        }
+        if (count >= 4) { // Changed from 3 to 4
+            for (let k = ROWS - count; k < ROWS; k++) {
+                addMatch([`${k},${c}`]);
+            }
+        }
+    }
+
+    // Check Diagonal (Top-Left to Bottom-Right) Matches
+    for (let r = 0; r < ROWS - 3; r++) { // Adjusted to ROWS - 3 for 4 in a row
+        for (let c = 0; c < COLS - 3; c++) { // Adjusted to COLS - 3 for 4 in a row
+            const emoji = grid[r][c];
+            if (
+                emoji &&
+                grid[r + 1][c + 1] === emoji &&
+                grid[r + 2][c + 2] === emoji &&
+                grid[r + 3][c + 3] === emoji
+            ) {
+                addMatch([
+                    `${r},${c}`,
+                    `${r + 1},${c + 1}`,
+                    `${r + 2},${c + 2}`,
+                    `${r + 3},${c + 3}`
+                ]);
+            }
+        }
+    }
+
+    // Check Diagonal (Bottom-Left to Top-Right) Matches
+    for (let r = 3; r < ROWS; r++) { // Start from row 3 for 4 in a row
+        for (let c = 0; c < COLS - 3; c++) { // Adjusted to COLS - 3 for 4 in a row
+            const emoji = grid[r][c];
+            if (
+                emoji &&
+                grid[r - 1][c + 1] === emoji &&
+                grid[r - 2][c + 2] === emoji &&
+                grid[r - 3][c + 3] === emoji
+            ) {
+                addMatch([
+                    `${r},${c}`,
+                    `${r - 1},${c + 1}`,
+                    `${r - 2},${c + 2}`,
+                    `${r - 3},${c + 3}`
+                ]);
+            }
+        }
+    }
+
+    return Array.from(matches).map(coord => {
+        const [r, c] = coord.split(',').map(Number);
+        return { row: r, col: c };
+    });
+}
+
+// Clear Matched Emojis
+function clearMatches(matches) {
+    matches.forEach(({ row, col }) => {
+        removeEmoji(row, col);
+    });
+    score += matches.length * 15; // Increased points per emoji for longer matches
+}
+
+// Collapse Grid After Clearing Matches
 function collapseGrid() {
-    // Implement the logic for collapsing the grid after clearing matches
+    for (let c = 0; c < COLS; c++) {
+        let emptyRows = [];
+        for (let r = ROWS - 1; r >= 0; r--) {
+            if (grid[r][c] === null) {
+                emptyRows.push(r);
+            } else if (emptyRows.length > 0) {
+                const emptyRow = emptyRows.shift();
+                grid[emptyRow][c] = grid[r][c];
+                grid[r][c] = null;
+
+                // Update DOM
+                const fromCell = document.querySelector(`.cell[data-row='${r}'][data-col='${c}']`);
+                const toCell = document.querySelector(`.cell[data-row='${emptyRow}'][data-col='${c}']`);
+                if (fromCell && toCell) {
+                    toCell.textContent = fromCell.textContent;
+                    fromCell.textContent = '';
+                }
+
+                emptyRows.push(r);
+            }
+        }
+    }
+
+    // After collapsing, check for new matches recursively
+    const newMatches = findAllMatches();
+    if (newMatches.length > 0) {
+        setTimeout(() => {
+            clearMatches(newMatches);
+            collapseGrid();
+            updateScore();
+        }, 300);
+    }
 }
 
 // Update Score Display
 function updateScore() {
     scoreElement.textContent = score;
-    const newLevel = Math.floor(score / 500) + 1;
+    const newLevel = Math.floor(score / 800) + 1; // Adjusted score threshold for leveling
     if (newLevel > level) {
         level = newLevel;
         updateLevel();
