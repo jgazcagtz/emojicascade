@@ -12,6 +12,11 @@ const restartButton = document.getElementById('restart-button');
 const gameContainer = document.getElementById('game-container');
 const scoreElement = document.getElementById('score');
 const levelElement = document.getElementById('level');
+const highScoreElement = document.getElementById('high-score');
+const nextEmojiElement = document.getElementById('next-emoji');
+const holdEmojiElement = document.getElementById('hold-emoji');
+const pauseBtn = document.getElementById('pause-btn');
+const muteBtn = document.getElementById('mute-btn');
 const finalScoreElement = document.getElementById('final-score');
 const leftBtn = document.getElementById('left-btn');
 const rightBtn = document.getElementById('right-btn');
@@ -26,6 +31,12 @@ let gameInterval = null;
 let fallSpeed = 500; // milliseconds
 let isGameOver = false;
 let isEmojiLocked = false;
+let isPaused = false;
+let isMuted = false;
+let nextEmoji = null;
+let heldEmoji = null;
+let hasSwappedThisTurn = false;
+let highScore = Number(localStorage.getItem('emojiCascadeHighScore') || 0);
 
 // Emojis Array
 const emojis = ['👽', '🍎', '🍌', '🍇', '🍉', '😂', '😍', '🐱', '🐶', '🍒', '🌟', '👾'];
@@ -35,6 +46,7 @@ const dropSound = new Audio('drop.mp3');
 const winSound = new Audio('win.mp3');
 const backgroundMusic = new Audio('background.mp3');
 backgroundMusic.loop = true;
+updateHighScoreDisplay();
 
 // Initialize Grid
 function initializeGrid() {
@@ -64,11 +76,14 @@ function startGame() {
     score = 0;
     level = 1;
     fallSpeed = 500;
+    nextEmoji = randomEmoji();
+    heldEmoji = null;
+    hasSwappedThisTurn = false;
     updateScore();
     updateLevel();
     spawnNewEmoji();
     backgroundMusic.currentTime = 0;
-    backgroundMusic.play();
+    playBg();
     isGameOver = false;
     clearInterval(gameInterval);
     gameInterval = setInterval(gameLoop, fallSpeed);
@@ -76,14 +91,16 @@ function startGame() {
 
 // Game Loop
 function gameLoop() {
-    if (!isEmojiLocked) {
+    if (!isEmojiLocked && !isPaused) {
         moveDown();
     }
 }
 
 // Spawn New Emoji
 function spawnNewEmoji() {
-    currentEmoji = emojis[Math.floor(Math.random() * emojis.length)];
+    currentEmoji = nextEmoji ?? randomEmoji();
+    nextEmoji = randomEmoji();
+    updateHud();
     currentPosition = { row: 0, col: Math.floor(COLS / 2) };
     if (grid[currentPosition.row][currentPosition.col] !== null) {
         endGame();
@@ -91,6 +108,7 @@ function spawnNewEmoji() {
     }
     placeEmoji(currentPosition.row, currentPosition.col, currentEmoji, true);
     isEmojiLocked = false;
+    hasSwappedThisTurn = false;
 }
 
 // Place Emoji in Grid
@@ -129,6 +147,19 @@ function moveDown() {
     } else {
         lockEmoji();
     }
+}
+
+// Hard Drop
+function hardDrop() {
+    if (isEmojiLocked || isPaused) return;
+    let { row, col } = currentPosition;
+    while (canMove(row + 1, col)) {
+        row += 1;
+    }
+    removeEmoji(currentPosition.row, currentPosition.col);
+    currentPosition.row = row;
+    placeEmoji(currentPosition.row, col, currentEmoji, true);
+    lockEmoji();
 }
 
 // Lock Emoji
@@ -282,12 +313,14 @@ function findAllMatches() {
     });
 }
 
-// Clear Matched Emojis
+// Clear Matched 
 function clearMatches(matches) {
     matches.forEach(({ row, col }) => {
         removeEmoji(row, col);
     });
-    score += matches.length * 15; // Increased points per emoji for longer matches
+    // Combo style scoring
+    const unique = new Set(matches.map(m => `${m.row},${m.col}`)).size;
+    score += unique * 20;
 }
 
 // Collapse Grid After Clearing Matches
@@ -315,7 +348,7 @@ function collapseGrid() {
         }
     }
 
-    // After collapsing, check for new matches recursively
+    // After collapsing, check for new matches
     const newMatches = findAllMatches();
     if (newMatches.length > 0) {
         setTimeout(() => {
@@ -333,6 +366,11 @@ function updateScore() {
     if (newLevel > level) {
         level = newLevel;
         updateLevel();
+    }
+    if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('emojiCascadeHighScore', String(highScore));
+        updateHighScoreDisplay();
     }
 }
 
@@ -370,12 +408,20 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') moveLeft();
     else if (e.key === 'ArrowRight') moveRight();
     else if (e.key === 'ArrowDown') moveDown();
+    else if (e.key === ' ' || e.key === 'ArrowUp') hardDrop();
+    else if (e.key.toLowerCase() === 'c' || e.key.toLowerCase() === 'shift') holdSwap();
+    else if (e.key.toLowerCase() === 'p') togglePause();
+    else if (e.key.toLowerCase() === 'm') toggleMute();
 });
 
 // Touch and Click Controls for Mobile
 addControlEvent(leftBtn, 'left');
 addControlEvent(rightBtn, 'right');
 addControlEvent(downBtn, 'down');
+const hardDropBtn = document.getElementById('harddrop-btn');
+const holdBtn = document.getElementById('hold-btn');
+addControlEvent(hardDropBtn, 'harddrop');
+addControlEvent(holdBtn, 'hold');
 
 function addControlEvent(button, action) {
     button.addEventListener('touchstart', (e) => {
@@ -394,7 +440,76 @@ function handleControl(action) {
     if (action === 'left') moveLeft();
     if (action === 'right') moveRight();
     if (action === 'down') moveDown();
+    if (action === 'harddrop') hardDrop();
+    if (action === 'hold') holdSwap();
 }
 
 // Initialize on Load
 window.onload = initializeGrid;
+
+// HUD helpers
+function randomEmoji() { return emojis[Math.floor(Math.random() * emojis.length)]; }
+function updateHud() {
+    if (nextEmojiElement) nextEmojiElement.textContent = nextEmoji ?? '?';
+    if (holdEmojiElement) holdEmojiElement.textContent = heldEmoji ?? '-';
+}
+function updateHighScoreDisplay() { if (highScoreElement) highScoreElement.textContent = String(highScore); }
+
+// Hold/Swap logic
+function holdSwap() {
+    if (isEmojiLocked || hasSwappedThisTurn || isPaused) return;
+    const temp = heldEmoji;
+    heldEmoji = currentEmoji;
+    if (temp == null) {
+        // Remove current and spawn next
+        removeEmoji(currentPosition.row, currentPosition.col);
+        spawnNewEmoji();
+    } else {
+        removeEmoji(currentPosition.row, currentPosition.col);
+        currentEmoji = temp;
+        currentPosition = { row: 0, col: Math.floor(COLS / 2) };
+        placeEmoji(currentPosition.row, currentPosition.col, currentEmoji, true);
+    }
+    hasSwappedThisTurn = true;
+    updateHud();
+}
+
+// Pause / Mute
+function togglePause() {
+    isPaused = !isPaused;
+    if (pauseBtn) pauseBtn.textContent = isPaused ? '▶️' : '⏸';
+}
+function toggleMute() {
+    isMuted = !isMuted;
+    backgroundMusic.muted = isMuted;
+    dropSound.muted = isMuted;
+    winSound.muted = isMuted;
+    if (muteBtn) muteBtn.textContent = isMuted ? '🔇' : '🔊';
+}
+function playBg() { if (!isMuted) backgroundMusic.play(); }
+
+// Bind pause/mute
+if (pauseBtn) pauseBtn.addEventListener('click', togglePause);
+if (muteBtn) muteBtn.addEventListener('click', toggleMute);
+
+// Basic swipe controls on grid
+let touchStartX = 0, touchStartY = 0;
+gridElement.addEventListener('touchstart', (e) => {
+    const t = e.changedTouches[0];
+    touchStartX = t.clientX; touchStartY = t.clientY;
+}, { passive: true });
+gridElement.addEventListener('touchend', (e) => {
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    const absX = Math.abs(dx), absY = Math.abs(dy);
+    if (Math.max(absX, absY) < 20) { // tap
+        hardDrop();
+        return;
+    }
+    if (absX > absY) {
+        if (dx > 0) moveRight(); else moveLeft();
+    } else {
+        if (dy > 0) moveDown(); else holdSwap();
+    }
+}, { passive: true });
